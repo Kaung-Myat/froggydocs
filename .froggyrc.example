@@ -1,0 +1,36 @@
+{
+  "title": "My API Documentation",
+  "version": "1.0.0",
+  "description": "Auto-generated API documentation",
+  
+  "server": {
+    "port": 8080,
+    "host": "localhost"
+  },
+  
+  "paths": {
+    "include": ["lib/", "src/", "api/"],
+    "exclude": ["test/", "node_modules/", ".dart_tool/"]
+  },
+  
+  "annotations": {
+    "prefix": "//",
+    "tags": {
+      "api": "Endpoint definition",
+      "desc": "Description",
+      "body": "Request body field",
+      "auth": "Requires authentication",
+      "tag": "Group/category"
+    }
+  },
+  
+  "output": {
+    "format": "openapi",
+    "file": "docs/froggy_docs.json"
+  },
+  
+  "theme": {
+    "primaryColor": "#2e7d32",
+    "darkMode": true
+  }
+}

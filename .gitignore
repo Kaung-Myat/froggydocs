@@ -1,0 +1,44 @@
+# Dart
+.dart_tool/
+.pub/
+.packages
+*.lock
+*.log
+
+# Build outputs
+bin/*.dill
+*.aot
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test
+test/
+coverage/
+
+# Frontend
+frontend/deploy/
+frontend/.dart_tool/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Temp
+tmp/
+temp/
+
+# Local config
+.froggyrc.local
+.env
+
+# Binary
+froggy-docs
+froggy_docs

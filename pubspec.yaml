@@ -1,0 +1,36 @@
+name: froggy_docs
+description: >
+  Auto-generate API documentation from code annotations. 
+  Works with any programming language (JavaScript, Python, Go, Ruby, etc.)
+version: 1.0.0
+repository: https://github.com/yourusername/froggy-docs
+homepage: https://github.com/yourusername/froggy-docs
+issue_tracker: https://github.com/yourusername/froggy-docs/issues
+
+environment:
+  sdk: ^3.11.5
+
+executables:
+  froggy_docs:
+    as: froggy-docs
+  froggy_docs:
+    from: bin/froggy_docs.dart
+
+dependencies:
+  args: ^2.7.0
+  path: ^1.9.1
+  watcher: ^1.2.1
+  shelf: ^1.4.2
+  shelf_router: ^1.1.4
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.6
+
+topics:
+  - api
+  - documentation
+  - openapi
+  - swagger
+  - generator
+  - developer-tools
