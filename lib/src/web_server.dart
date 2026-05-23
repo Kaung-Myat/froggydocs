@@ -1,14 +1,20 @@
 import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
 import 'package:path/path.dart' as p;
+import 'package:http/http.dart' as http;
 
 const defaultPort = 8080;
 
-Future<void> startServer({int port = defaultPort}) async {
+String _proxyUrl = '';
+
+Future<void> startServer({int port = defaultPort, String proxyUrl = ''}) async {
+  _proxyUrl = proxyUrl;
+  
   final handler = const Pipeline()
       .addMiddleware(logRequests())
       .addHandler(_router.call);
@@ -26,17 +32,30 @@ const _corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
-const String webDir = 'frontend/web';
-const String deployDir = 'frontend/deploy/web';
+String get _packageDir {
+  final exePath = Platform.resolvedExecutable;
+  final exeDir = File(exePath).parent.path;
+  return p.dirname(exeDir);
+}
+
+String get webDir => p.join(_packageDir, 'frontend', 'web');
+String get deployDir => p.join(_packageDir, 'frontend', 'deploy', 'web');
+
+String get userWebDir => p.join(Directory.current.path, 'frontend', 'web');
 
 Router get _router {
   final router = Router();
 
   router.get('/froggy_docs.json', (Request request) async {
-    final file = File(
-      p.join(Directory.current.path, webDir, 'froggy_docs.json'),
-    );
-    if (await file.existsSync()) {
+    var file = File(p.join(userWebDir, 'froggy_docs.json'));
+    if (file.existsSync()) {
+      return Response.ok(
+        file.openRead(),
+        headers: {'Content-Type': 'application/json'},
+      );
+    }
+    file = File(p.join(webDir, 'froggy_docs.json'));
+    if (file.existsSync()) {
       return Response.ok(
         file.openRead(),
         headers: {'Content-Type': 'application/json'},
@@ -46,10 +65,8 @@ Router get _router {
   });
 
   router.get('/', (Request request) async {
-    final indexFile = File(
-      p.join(Directory.current.path, deployDir, 'index.html'),
-    );
-    if (await indexFile.existsSync()) {
+    final indexFile = File(p.join(webDir, 'index.html'));
+    if (indexFile.existsSync()) {
       return Response.ok(
         indexFile.openRead(),
         headers: {'Content-Type': 'text/html'},
@@ -58,11 +75,6 @@ Router get _router {
     return Response.notFound('index.html not found');
   });
 
-  // ═════════════════════════════════════════════════════════════
-  // Demo/Mock API Endpoints
-  // These are included for testing "Try It Out" functionality
-  // Remove these routes in production - your real API will handle requests
-  // ═════════════════════════════════════════════════════════════
   router.post('/api/simple', (Request request) async {
     final body = await request.readAsString();
     return Response.ok(
@@ -89,6 +101,27 @@ Router get _router {
       jsonEncode({
         'status': 'updated',
         'timestamp': DateTime.now().toIso8601String(),
+      }),
+      headers: {'Content-Type': 'application/json'},
+    );
+  });
+
+  router.post('/api/upload', (Request request) async {
+    final contentType = request.headers['content-type'] ?? '';
+    if (contentType.contains('multipart/form-data')) {
+      return Response.ok(
+        jsonEncode({
+          'status': 'success',
+          'message': 'File upload received (multipart/form-data)',
+        }),
+        headers: {'Content-Type': 'application/json'},
+      );
+    }
+    final body = await request.readAsString();
+    return Response.ok(
+      jsonEncode({
+        'status': 'success',
+        'received': body.isNotEmpty ? jsonDecode(body) : {},
       }),
       headers: {'Content-Type': 'application/json'},
     );
@@ -123,22 +156,76 @@ Router get _router {
     ),
   );
 
-  // ═════════════════════════════════════════════════════════════
-  // End of Demo/Mock API
-  // In production: Remove lines 66-124 or connect to your real API
-  // The "Try It Out" button will call your actual API endpoints
-  // ═════════════════════════════════════════════════════════════
+  router.all('/api/<path.*>', (Request request, String path) async {
+    if (_proxyUrl.isEmpty) {
+      return Response.notFound('{"error": "Proxy not configured. Use --proxy http://localhost:3000"');
+    }
+
+    try {
+      final targetUrl = '$_proxyUrl/api/$path';
+      final method = request.method;
+      final contentType = request.headers['content-type'] ?? '';
+
+      final client = http.Client();
+      http.Request req;
+
+      if (method == 'GET' || method == 'HEAD') {
+        req = http.Request(method, Uri.parse(targetUrl));
+      } else if (contentType.contains('multipart/form-data')) {
+        // Read as bytes to preserve binary file data.
+        final chunks = <int>[];
+        await for (final chunk in request.read()) {
+          chunks.addAll(chunk);
+        }
+        req = http.Request(method, Uri.parse(targetUrl));
+        req.bodyBytes = Uint8List.fromList(chunks);
+      } else {
+        final body = await request.readAsString();
+        req = http.Request(method, Uri.parse(targetUrl));
+        if (body.isNotEmpty) {
+          req.body = body;
+        }
+      }
+
+      request.headers.forEach((key, value) {
+        if (key.toLowerCase() != 'host') {
+          req.headers[key] = value;
+        }
+      });
+
+      if (contentType.contains('multipart/form-data')) {
+        req.headers['content-type'] = contentType;
+      }
+
+      final streamedResponse = await client.send(req);
+      final responseBody = await streamedResponse.stream.bytesToString();
+      
+      return Response(
+        streamedResponse.statusCode,
+        body: responseBody,
+        headers: {
+          'Content-Type': streamedResponse.headers['content-type'] ?? 'application/json',
+          ..._corsHeaders,
+        },
+      );
+    } catch (e) {
+      return Response.internalServerError(
+        body: '{"error": "Proxy error: $e"}',
+        headers: {'Content-Type': 'application/json'},
+      );
+    }
+  });
 
   router.get('/<path|[^/]+>', (Request request, String path) async {
-    var file = File(p.join(Directory.current.path, deployDir, path));
-    if (await file.existsSync()) {
+    var file = File(p.join(deployDir, path));
+    if (file.existsSync()) {
       return Response.ok(
         file.openRead(),
         headers: {'Content-Type': _getContentType(path)},
       );
     }
-    file = File(p.join(Directory.current.path, webDir, path));
-    if (await file.existsSync()) {
+    file = File(p.join(webDir, path));
+    if (file.existsSync()) {
       return Response.ok(
         file.openRead(),
         headers: {'Content-Type': _getContentType(path)},

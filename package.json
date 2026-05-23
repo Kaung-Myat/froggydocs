@@ -1,12 +1,12 @@
 {
   "name": "froggy-docs",
-  "version": "1.0.0",
+  "version": "1.1.2",
   "description": "Auto-generate API documentation from code annotations. Works with any programming language.",
-  "author": "Your Name <your@email.com>",
-  "homepage": "https://github.com/yourusername/froggy-docs",
+  "author": "Kaung Mrat Thu <kaungmyatthuu.dev@gmail.com>",
+  "homepage": "https://github.com/Kaung-Myat/froggydocs",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/froggy-docs.git"
+    "url": "https://github.com/Kaung-Myat/froggydocs.git"
   },
   "license": "MIT",
   "keywords": [
@@ -19,12 +19,9 @@
     "developer-tools"
   ],
   "bin": {
-    "froggy-docs": "./bin/froggy_docs.dart"
+    "froggy-docs": "./bin/froggy-docs"
   },
-  "scripts": {
-    "postinstall": "dart pub get",
-    "prepublish": "dart compile exe bin/froggy_docs.dart -o froggy-docs"
-  },
+  "scripts": {},
   "engines": {
     "node": ">=14.0.0"
   },
@@ -36,7 +33,5 @@
   "publishConfig": {
     "registry": "https://registry.npmjs.org"
   },
-  "dependencies": {
-    "froggy_docs": "^1.0.0"
-  }
+  "dependencies": {}
 }

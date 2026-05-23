@@ -11,10 +11,7 @@ environment:
   sdk: ^3.11.5
 
 executables:
-  froggy_docs:
-    as: froggy-docs
-  froggy_docs:
-    from: bin/froggy_docs.dart
+  froggy_docs: null
 
 dependencies:
   args: ^2.7.0
@@ -22,6 +19,7 @@ dependencies:
   watcher: ^1.2.1
   shelf: ^1.4.2
   shelf_router: ^1.1.4
+  http: ^1.4.0
 
 dev_dependencies:
   lints: ^6.0.0

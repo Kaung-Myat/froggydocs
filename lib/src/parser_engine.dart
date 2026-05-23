@@ -36,6 +36,14 @@ class ParserEngine {
     'options',
   };
 
+  String _outputPath = 'frontend/web/froggy_docs.json';
+
+  void setOutputPath(String path) {
+    _outputPath = path;
+  }
+
+  String get outputPath => _outputPath;
+
   final Map<String, dynamic> _baseSpec = {
     "openapi": "3.0.0",
     "info": {
@@ -104,6 +112,37 @@ class ParserEngine {
     }
   }
 
+  dynamic _parseDefaultValue(String value, String? type) {
+    switch (type?.toString().toLowerCase()) {
+      case 'number':
+      case 'integer':
+      case 'int':
+        return num.tryParse(value) ?? value;
+      case 'boolean':
+        return value.toLowerCase() == 'true';
+      default:
+        return value;
+    }
+  }
+
+  void _attachResponseExample(
+    String code,
+    dynamic jsonData,
+    Map<String, Map<String, dynamic>> responseSchemas,
+  ) {
+    final response = responseSchemas[code]!;
+    if (!response.containsKey('content')) {
+      response['content'] = <String, dynamic>{
+        "application/json": <String, dynamic>{
+          "schema": <String, dynamic>{"type": "object"},
+        },
+      };
+    }
+    final contentMap = response['content'] as Map;
+    final appJsonMap = contentMap['application/json'] as Map;
+    appJsonMap['example'] = jsonData;
+  }
+
   void parseFile(String filePath) {
     _errors.clear();
 
@@ -132,8 +171,15 @@ class ParserEngine {
     bool hasAuth = false;
     List<String> currentTags = [];
     List<Map<String, String>> requestBodyFields = [];
+    List<Map<String, String>> requestFileFields = [];
+    List<Map<String, dynamic>> queryParams = [];
+    List<Map<String, dynamic>> headerParams = [];
+    Map<String, Map<String, dynamic>> responseSchemas = {};
+    String? pendingResponseCode;
     bool isReadingBodyJson = false;
+    bool isReadingResponseJson = false;
     StringBuffer bodyJsonBuffer = StringBuffer();
+    StringBuffer responseJsonBuffer = StringBuffer();
     int lineNumber = 0;
 
     String inferType(dynamic value) {
@@ -146,6 +192,44 @@ class ParserEngine {
     }
 
     void flushEndpoint() {
+      // Defensively flush any pending JSON buffers (handles end-of-file cases).
+      if (isReadingBodyJson && bodyJsonBuffer.isNotEmpty) {
+        isReadingBodyJson = false;
+        try {
+          final jsonData = jsonDecode(bodyJsonBuffer.toString());
+          if (jsonData is Map) {
+            for (final entry in jsonData.entries) {
+              requestBodyFields.add({
+                'name': entry.key.toString(),
+                'type': inferType(entry.value),
+                'desc': 'Inferred from JSON',
+              });
+            }
+          }
+        } catch (e) {
+          _errors.add('Invalid JSON in @body-json at line $lineNumber: $e');
+        }
+        bodyJsonBuffer.clear();
+      }
+
+      if (isReadingResponseJson &&
+          responseJsonBuffer.isNotEmpty &&
+          pendingResponseCode != null) {
+        isReadingResponseJson = false;
+        try {
+          final jsonData = jsonDecode(responseJsonBuffer.toString());
+          _attachResponseExample(
+            pendingResponseCode!,
+            jsonData,
+            responseSchemas,
+          );
+        } catch (e) {
+          _errors
+              .add('Invalid JSON in @response-json at line $lineNumber: $e');
+        }
+        responseJsonBuffer.clear();
+      }
+
       if (currentMethod != null) {
         if (currentPath == null) {
           _errors.add('Endpoint defined without path at line $lineNumber');
@@ -153,8 +237,15 @@ class ParserEngine {
           currentPath = null;
           description = '';
           hasAuth = false;
+          currentTags.clear();
           requestBodyFields.clear();
+          requestFileFields.clear();
+          queryParams.clear();
+          headerParams.clear();
+          responseSchemas.clear();
+          pendingResponseCode = null;
           bodyJsonBuffer.clear();
+          responseJsonBuffer.clear();
           return;
         }
 
@@ -166,8 +257,15 @@ class ParserEngine {
           currentPath = null;
           description = '';
           hasAuth = false;
+          currentTags.clear();
           requestBodyFields.clear();
+          requestFileFields.clear();
+          queryParams.clear();
+          headerParams.clear();
+          responseSchemas.clear();
+          pendingResponseCode = null;
           bodyJsonBuffer.clear();
+          responseJsonBuffer.clear();
           return;
         }
 
@@ -178,11 +276,16 @@ class ParserEngine {
           fileEndpoints[path] = {};
         }
 
+        final responses = <String, dynamic>{};
+        if (responseSchemas.isEmpty) {
+          responses['200'] = {"description": "Successful response"};
+        } else {
+          responses.addAll(responseSchemas);
+        }
+
         Map<String, dynamic> endpointData = {
           "summary": description.isNotEmpty ? description : "No description",
-          "responses": {
-            "200": {"description": "Successful response"},
-          },
+          "responses": responses,
         };
 
         if (currentTags.isNotEmpty) {
@@ -195,25 +298,79 @@ class ParserEngine {
           ];
         }
 
-        if (requestBodyFields.isNotEmpty) {
-          Map<String, dynamic> properties = {};
-          for (var field in requestBodyFields) {
-            final fieldName = field['name'];
-            if (fieldName != null && fieldName.isNotEmpty) {
-              properties[fieldName] = {
-                "type": (field['type'] ?? 'string').toString().toLowerCase(),
-                "description": field['desc'] ?? '',
-              };
-            }
-          }
-
-          endpointData['requestBody'] = {
-            "content": {
-              "application/json": {
-                "schema": {"type": "object", "properties": properties},
-              },
+        final parameters = <Map<String, dynamic>>[];
+        for (var qp in queryParams) {
+          final param = <String, dynamic>{
+            "name": qp['name'],
+            "in": "query",
+            "description": qp['desc'] ?? '',
+            "schema": <String, dynamic>{
+              "type": (qp['type'] ?? 'string').toString().toLowerCase(),
             },
           };
+          if (qp['default'] != null && (qp['default'] as String).isNotEmpty) {
+            param['schema']['default'] = _parseDefaultValue(
+              qp['default'] as String,
+              qp['type'],
+            );
+          }
+          parameters.add(param);
+        }
+        for (var hp in headerParams) {
+          parameters.add({
+            "name": hp['name'],
+            "in": "header",
+            "description": hp['desc'] ?? '',
+            "schema": {
+              "type": (hp['type'] ?? 'string').toString().toLowerCase(),
+            },
+          });
+        }
+        if (parameters.isNotEmpty) {
+          endpointData['parameters'] = parameters;
+        }
+
+        if (requestBodyFields.isNotEmpty || requestFileFields.isNotEmpty) {
+          final properties = <String, dynamic>{};
+          for (var field in requestBodyFields) {
+            final fieldName = field['name']!;
+            properties[fieldName] = {
+              "type": (field['type'] ?? 'string').toString().toLowerCase(),
+              "description": field['desc'] ?? '',
+            };
+          }
+          for (var field in requestFileFields) {
+            final fieldName = field['name']!;
+            properties[fieldName] = {
+              "type": "string",
+              "format": "binary",
+              "description": field['desc'] ?? '',
+            };
+          }
+
+          if (requestFileFields.isNotEmpty) {
+            endpointData['requestBody'] = {
+              "content": <String, dynamic>{
+                "multipart/form-data": <String, dynamic>{
+                  "schema": <String, dynamic>{
+                    "type": "object",
+                    "properties": properties,
+                  },
+                },
+              },
+            };
+          } else {
+            endpointData['requestBody'] = {
+              "content": <String, dynamic>{
+                "application/json": <String, dynamic>{
+                  "schema": <String, dynamic>{
+                    "type": "object",
+                    "properties": properties,
+                  },
+                },
+              },
+            };
+          }
         }
 
         fileEndpoints[path][method] = endpointData;
@@ -225,7 +382,13 @@ class ParserEngine {
       hasAuth = false;
       currentTags.clear();
       requestBodyFields.clear();
+      requestFileFields.clear();
+      queryParams.clear();
+      headerParams.clear();
+      responseSchemas.clear();
+      pendingResponseCode = null;
       bodyJsonBuffer.clear();
+      responseJsonBuffer.clear();
     }
 
     for (final l in lines) {
@@ -255,6 +418,29 @@ class ParserEngine {
         } else {
           final commentText = _extractCommentText(trimmed, commentPrefix);
           bodyJsonBuffer.write(commentText);
+          continue;
+        }
+      }
+
+      if (isReadingResponseJson) {
+        if (!_isCommentLine(trimmed, commentPrefix)) {
+          isReadingResponseJson = false;
+          if (responseJsonBuffer.isNotEmpty && pendingResponseCode != null) {
+            try {
+              final jsonData = jsonDecode(responseJsonBuffer.toString());
+              _attachResponseExample(
+                pendingResponseCode!,
+                jsonData,
+                responseSchemas,
+              );
+            } catch (e) {
+              _errors.add('Invalid response JSON at line $lineNumber: $e');
+            }
+          }
+          responseJsonBuffer.clear();
+        } else {
+          final commentText = _extractCommentText(trimmed, commentPrefix);
+          responseJsonBuffer.write(commentText);
           continue;
         }
       }
@@ -309,7 +495,24 @@ class ParserEngine {
             'desc': fieldDesc,
           });
         } else {
-          _errors.add('@body requires field name and type at line $lineNumber');
+          _errors.add(
+            '@body requires field name and type at line $lineNumber',
+          );
+        }
+      } else if (tag == '@file') {
+        if (parts.length >= 3) {
+          final fieldName = parts[1];
+          final fileType = parts[2];
+          final fieldDesc = parts.length > 3 ? parts.sublist(3).join(' ') : '';
+          requestFileFields.add({
+            'name': fieldName,
+            'type': fileType,
+            'desc': fieldDesc,
+          });
+        } else {
+          _errors.add(
+            '@file requires field name and type at line $lineNumber',
+          );
         }
       } else if (tag == '@body-file') {
         if (parts.length >= 2) {
@@ -334,6 +537,92 @@ class ParserEngine {
       } else if (tag == '@body-json') {
         isReadingBodyJson = true;
         bodyJsonBuffer.clear();
+      } else if (tag == '@response') {
+        if (parts.length >= 3) {
+          pendingResponseCode = parts[1];
+          final responseType = parts[2];
+          final responseDesc =
+              parts.length > 3 ? parts.sublist(3).join(' ') : '';
+          final lowerType = responseType.toLowerCase();
+          final schemaType = (lowerType == 'array') ? 'array' : 'object';
+          responseSchemas[pendingResponseCode!] = {
+            "description": responseDesc,
+            "content": <String, dynamic>{
+              "application/json": <String, dynamic>{
+                "schema": <String, dynamic>{"type": schemaType},
+              },
+            },
+          };
+        } else {
+          _errors.add(
+            '@response requires status code and type at line $lineNumber',
+          );
+        }
+      } else if (tag == '@response-json') {
+        if (pendingResponseCode != null &&
+            responseSchemas.containsKey(pendingResponseCode)) {
+          final rest = commentText.replaceFirst('@response-json', '').trim();
+          if (rest.isNotEmpty) {
+            try {
+              final jsonData = jsonDecode(rest);
+              _attachResponseExample(
+                pendingResponseCode!,
+                jsonData,
+                responseSchemas,
+              );
+            } catch (_) {
+              isReadingResponseJson = true;
+              responseJsonBuffer.clear();
+              responseJsonBuffer.write(rest);
+            }
+          } else {
+            isReadingResponseJson = true;
+            responseJsonBuffer.clear();
+          }
+        }
+      } else if (tag == '@query') {
+        if (parts.length >= 3) {
+          final name = parts[1];
+          final type = parts[2];
+          String desc = '';
+          String? defaultValue;
+
+          final rest = parts.length > 3 ? parts.sublist(3).join(' ') : '';
+          final defaultMatch =
+              RegExp(r'\(default:\s*(.+?)\)').firstMatch(rest);
+          if (defaultMatch != null) {
+            defaultValue = defaultMatch.group(1);
+            desc = rest.replaceFirst(defaultMatch.group(0)!, '').trim();
+          } else {
+            desc = rest;
+          }
+
+          queryParams.add({
+            'name': name,
+            'type': type,
+            'desc': desc,
+            'default': defaultValue,
+          });
+        } else {
+          _errors.add(
+            '@query requires name and type at line $lineNumber',
+          );
+        }
+      } else if (tag == '@header') {
+        if (parts.length >= 3) {
+          final name = parts[1];
+          final type = parts[2];
+          final desc = parts.length > 3 ? parts.sublist(3).join(' ') : '';
+          headerParams.add({
+            'name': name,
+            'type': type,
+            'desc': desc,
+          });
+        } else {
+          _errors.add(
+            '@header requires name and type at line $lineNumber',
+          );
+        }
       }
     }
 
@@ -341,7 +630,7 @@ class ParserEngine {
 
     if (_errors.isNotEmpty) {
       for (final error in _errors) {
-        print('⚠️ $error');
+        print('⚠️  $error');
       }
     }
 
@@ -370,12 +659,11 @@ class ParserEngine {
 
     _baseSpec['paths'] = fullPaths;
 
-    // Add tags if any
     if (_tags.isNotEmpty) {
       _baseSpec['tags'] = _tags.map((t) => {"name": t}).toList();
     }
 
-    final swaggerFile = File('frontend/web/froggy_docs.json');
+    final swaggerFile = File(_outputPath);
     if (!swaggerFile.parent.existsSync()) {
       swaggerFile.parent.createSync(recursive: true);
     }
@@ -386,5 +674,46 @@ class ParserEngine {
     print(
       '🐸 FroggyDocs: Updated documentation. Total paths: ${fullPaths.length}',
     );
+  }
+
+  Map<String, dynamic> generateSpec() {
+    final Map<String, dynamic> fullPaths = {};
+    for (final fileMap in _fileRegistry.values) {
+      for (final entry in fileMap.entries) {
+        final path = entry.key;
+        final methods = entry.value;
+        if (fullPaths[path] == null) {
+          fullPaths[path] = {};
+        }
+        (fullPaths[path] as Map).addAll(methods);
+      }
+    }
+    final spec = Map<String, dynamic>.from(_baseSpec);
+    spec['paths'] = fullPaths;
+    if (_tags.isNotEmpty) {
+      spec['tags'] = _tags.map((t) => {"name": t}).toList();
+    }
+    return spec;
+  }
+
+  void clearRegistry() {
+    _fileRegistry.clear();
+    _tags.clear();
+    _errors.clear();
+  }
+
+  int get pathCount {
+    final Map<String, dynamic> fullPaths = {};
+    for (final fileMap in _fileRegistry.values) {
+      for (final entry in fileMap.entries) {
+        final path = entry.key;
+        final methods = entry.value;
+        if (fullPaths[path] == null) {
+          fullPaths[path] = {};
+        }
+        (fullPaths[path] as Map).addAll(methods);
+      }
+    }
+    return fullPaths.length;
   }
 }
