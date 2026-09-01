@@ -1,0 +1,106 @@
+name: Release binaries and npm package
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: dart pub get
+      - run: dart analyze
+      - run: dart test
+      - run: npm test
+      - run: npm run verify-version
+      - run: npm pack --dry-run
+
+  build:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: froggy-docs-linux-x64
+          - os: ubuntu-24.04-arm
+            asset: froggy-docs-linux-arm64
+          - os: macos-15-intel
+            asset: froggy-docs-darwin-x64
+          - os: macos-15
+            asset: froggy-docs-darwin-arm64
+          - os: windows-latest
+            asset: froggy-docs-win32-x64.exe
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - run: dart pub get
+      - run: dart compile exe bin/froggy_docs.dart -o ${{ matrix.asset }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Generate SHA-256 manifest
+        working-directory: release-assets
+        run: sha256sum froggy-docs-* > checksums.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: |
+            release-assets/froggy-docs-*
+            release-assets/checksums.txt
+
+  publish-npm:
+    needs: release
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - name: Verify released binary installation
+        env:
+          FROGGY_DOCS_INSTALL_DIR: ${{ runner.temp }}/froggy-docs-install
+        run: node package.js install
+      - name: Publish with the correct distribution tag
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          tag="latest"
+          if [[ "$version" == *-* ]]; then tag="beta"; fi
+          npm publish --access public --tag "$tag"

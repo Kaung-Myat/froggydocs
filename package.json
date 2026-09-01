@@ -1,12 +1,12 @@
 {
   "name": "froggy-docs",
-  "version": "1.1.2",
-  "description": "Auto-generate API documentation from code annotations. Works with any programming language.",
-  "author": "Kaung Mrat Thu <kaungmyatthuu.dev@gmail.com>",
+  "version": "1.2.0-beta.1",
+  "description": "Language-agnostic API documentation, testing, and static deployment from source annotations.",
+  "author": "Kaung Mrat Thu <kaungmratthu.dev@gmail.com>",
   "homepage": "https://github.com/Kaung-Myat/froggydocs",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Kaung-Myat/froggydocs.git"
+    "url": "git+https://github.com/Kaung-Myat/froggydocs.git"
   },
   "license": "MIT",
   "keywords": [
@@ -16,14 +16,30 @@
     "swagger",
     "auto-generate",
     "api-docs",
-    "developer-tools"
+    "developer-tools",
+    "dart",
+    "static-site"
   ],
   "bin": {
-    "froggy-docs": "./bin/froggy-docs"
+    "froggy-docs": "package.js"
   },
-  "scripts": {},
+  "files": [
+    "package.js",
+    "frontend/web/",
+    "README.md",
+    "CHANGELOG.md",
+    "DEPLOYMENT.md",
+    "RELEASE.md",
+    "LICENSE",
+    "froggy_docs.example.yaml"
+  ],
+  "scripts": {
+    "test": "node --test test/npm_wrapper_test.js",
+    "verify-version": "node scripts/verify-version.js",
+    "prepack": "npm run verify-version && npm test"
+  },
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=18.0.0"
   },
   "os": [
     "darwin",

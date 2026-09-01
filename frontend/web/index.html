@@ -7,28 +7,109 @@
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div class="app-container">
-        <aside class="sidebar">
+    <div class="app-container" id="appContainer">
+        <aside class="sidebar" aria-label="API navigation">
             <div class="sidebar-header">
-                <h2><span>🐸</span> FroggyDocs</h2>
+                <div class="brand-copy">
+                    <strong>FroggyDocs</strong>
+                    <span>API workspace</span>
+                </div>
+                <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-label="Collapse sidebar" title="Collapse sidebar">
+                    <span class="sidebar-toggle-icon" aria-hidden="true"></span>
+                </button>
             </div>
             <div class="search-container">
-                <input type="text" class="search-box" id="searchInput" placeholder="Search tags or endpoints...">
+                <label class="sr-only" for="searchInput">Search API documentation</label>
+                <input type="search" class="search-box" id="searchInput" placeholder="Search endpoints" autocomplete="off">
             </div>
             <nav class="nav-list" id="navList"></nav>
+            <div class="sidebar-settings">
+                <button class="settings-trigger" id="settingsToggle" type="button">
+                    <span class="settings-icon" aria-hidden="true"></span>
+                    <span class="sidebar-control-label">Settings</span>
+                </button>
+            </div>
         </aside>
         <main class="main-content">
-            <header class="header">
-                <h1 id="docTitle">API Documentation</h1>
-                <button class="theme-toggle" id="themeToggle">🌙</button>
-            </header>
-            <div class="settings-section">
-                <div>Authorization: </div>
-                <input type="text" class="auth-input" id="authInput" placeholder="Bearer token">
+            <div class="docs-view" id="docsView">
+                <header class="header">
+                    <div class="title-group">
+                        <span class="eyebrow">Developer reference</span>
+                        <h1 id="docTitle">API Documentation</h1>
+                        <p id="docDescription">Explore endpoints, inspect schemas, and send test requests.</p>
+                    </div>
+                    <div class="header-actions">
+                        <label class="environment-control" id="environmentControl" hidden>
+                            <span>Environment</span>
+                            <select id="environmentSelect" aria-label="API environment"></select>
+                        </label>
+                        <span class="endpoint-count" id="endpointCount">0 endpoints</span>
+                    </div>
+                </header>
+                <div class="environment-warning" id="environmentWarning" role="status" hidden></div>
+                <div id="apiList">
+                    <div class="loading-state">Loading API specification</div>
+                </div>
             </div>
-            <div id="apiList"></div>
+            <section class="settings-page" id="settingsView" aria-labelledby="settingsTitle" hidden>
+                <button class="back-button" id="settingsBackButton" type="button" aria-label="Back to API documentation" title="Back to API documentation">
+                    <span class="back-icon" aria-hidden="true"></span>
+                </button>
+                <div class="settings-page-header">
+                    <span class="eyebrow">Workspace preferences</span>
+                    <h1 id="settingsTitle">Settings</h1>
+                    <p>Manage request authorization and the interface appearance.</p>
+                </div>
+                <div class="settings-card">
+                    <div class="settings-card-copy">
+                        <h2>Authorization</h2>
+                        <p>Save an encrypted token in this browser and apply it to authenticated requests.</p>
+                    </div>
+                    <div class="token-field">
+                        <label for="authInput">Authorization token</label>
+                        <div class="token-input-wrap">
+                            <input type="password" class="auth-input" id="authInput" placeholder="Bearer token or API key" autocomplete="off">
+                            <button class="token-visibility-toggle" id="tokenVisibilityToggle" type="button" aria-label="Show token" title="Show token">
+                                <span class="visibility-icon" aria-hidden="true"></span>
+                            </button>
+                        </div>
+                        <div class="token-save-row">
+                            <span class="token-save-status" id="tokenSaveStatus" role="status" aria-live="polite"></span>
+                            <button class="save-token-button" id="saveTokenButton" type="button">Save token</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="settings-card">
+                    <div class="settings-card-copy">
+                        <h2>Appearance</h2>
+                        <p>Choose the color theme used by the API documentation.</p>
+                    </div>
+                    <div class="theme-setting-row">
+                        <span id="themeModeLabel">Light mode</span>
+                        <button class="theme-icon-toggle" id="themeToggle" type="button" aria-label="Switch to dark mode" title="Switch to dark mode">
+                            <span class="theme-icon" aria-hidden="true"></span>
+                        </button>
+                    </div>
+                </div>
+            </section>
         </main>
     </div>
+    <dialog class="media-preview-dialog" id="mediaPreviewDialog" aria-labelledby="mediaPreviewTitle">
+        <div class="media-preview-content">
+            <div class="media-preview-header">
+                <div>
+                    <span class="eyebrow">Uploaded media</span>
+                    <h2 id="mediaPreviewTitle">Media preview</h2>
+                </div>
+                <button class="media-preview-close" id="mediaPreviewClose" type="button" aria-label="Close media preview" title="Close preview"></button>
+            </div>
+            <div class="media-preview-stage">
+                <img id="mediaPreviewImage" alt="Uploaded media preview">
+            </div>
+            <p class="media-preview-caption" id="mediaPreviewCaption"></p>
+        </div>
+    </dialog>
+    <script src="token_storage.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

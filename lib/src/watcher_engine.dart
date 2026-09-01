@@ -3,44 +3,60 @@ import 'dart:async';
 import 'package:watcher/watcher.dart';
 import 'package:path/path.dart' as p;
 import 'parser_engine.dart';
+import 'froggy_config.dart';
 
 class WatcherEngine {
   final ParserEngine _parser;
-  Timer? _debounceTimer;
+  final Map<String, Timer> _debounceTimers = {};
   final Duration _debounceDuration;
   final String? _ignorePattern;
+  StreamSubscription<WatchEvent>? _subscription;
 
   WatcherEngine({
     String outputPath = 'frontend/web/froggy_docs.json',
     String ignorePattern = '',
     Duration debounceDuration = const Duration(milliseconds: 300),
-  })  : _parser = ParserEngine(),
-        _debounceDuration = debounceDuration,
-        _ignorePattern = ignorePattern.isEmpty ? null : ignorePattern {
+    FroggyConfig config = const FroggyConfig(),
+    String? basePath,
+  }) : _parser = ParserEngine(),
+       _debounceDuration = debounceDuration,
+       _ignorePattern = ignorePattern.isEmpty ? null : ignorePattern {
+    final runtimeExtension = Map<String, dynamic>.from(config.runtimeExtension);
+    if (basePath != null) runtimeExtension['basePath'] = basePath;
     _parser.setOutputPath(outputPath);
+    _parser.configureMetadata(
+      title: config.title,
+      version: config.version,
+      description: config.description,
+      servers: config.servers.map((server) => server.toOpenApi()).toList(),
+      runtimeExtension: runtimeExtension,
+    );
   }
 
-  void startWatching(String directoryPath) {
+  Future<void> startWatching(String directoryPath) async {
     print('🚀 Initializing FroggyDocs scan...');
-    _initialScan(directoryPath);
-
     final watcher = DirectoryWatcher(directoryPath);
-    print('👀 Watching for changes in: ${p.absolute(directoryPath)}...\n');
-
-    watcher.events.listen((WatchEvent event) {
+    _subscription = watcher.events.listen((WatchEvent event) {
       if (_shouldIgnore(event.path)) return;
       _handleFileChange(event);
     });
+
+    await _initialScan(directoryPath);
+    print('👀 Watching for changes in: ${p.absolute(directoryPath)}...\n');
   }
 
-  void _initialScan(String directoryPath) {
+  Future<void> _initialScan(String directoryPath) async {
     final dir = Directory(directoryPath);
     try {
-      dir.listSync(recursive: true).forEach((entity) {
+      await for (final entity in dir.list(
+        recursive: true,
+        followLinks: false,
+      )) {
         if (entity is File && !_shouldIgnore(entity.path)) {
-          _parser.parseFile(entity.path);
+          _parser.parseFile(entity.path, writeOutput: false);
         }
-      });
+      }
+      _parser.writeOutput();
     } catch (e) {
       print('⚠️  Warning during initial scan: $e');
     }
@@ -72,9 +88,11 @@ class WatcherEngine {
   }
 
   void _handleFileChange(WatchEvent event) {
-    _debounceTimer?.cancel();
+    final normalizedPath = p.normalize(event.path);
+    _debounceTimers.remove(normalizedPath)?.cancel();
 
-    _debounceTimer = Timer(_debounceDuration, () {
+    _debounceTimers[normalizedPath] = Timer(_debounceDuration, () {
+      _debounceTimers.remove(normalizedPath);
       switch (event.type) {
         case ChangeType.ADD:
         case ChangeType.MODIFY:
@@ -86,5 +104,13 @@ class WatcherEngine {
           break;
       }
     });
+  }
+
+  Future<void> dispose() async {
+    for (final timer in _debounceTimers.values) {
+      timer.cancel();
+    }
+    _debounceTimers.clear();
+    await _subscription?.cancel();
   }
 }

@@ -13,6 +13,12 @@
 
 include: package:lints/recommended.yaml
 
+analyzer:
+  # The frontend is a separate Dart package with its own dependencies and
+  # analysis options. Analyze it from frontend/ instead of with this package.
+  exclude:
+    - frontend/**
+
 # Uncomment the following section to specify additional rules.
 
 # linter:

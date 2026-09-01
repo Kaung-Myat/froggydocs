@@ -44,6 +44,26 @@ class ParserEngine {
 
   String get outputPath => _outputPath;
 
+  void configureMetadata({
+    required String title,
+    required String version,
+    required String description,
+    required List<Map<String, dynamic>> servers,
+    required Map<String, dynamic> runtimeExtension,
+  }) {
+    _baseSpec['info'] = {
+      'title': title,
+      'version': version,
+      'description': description,
+    };
+    if (servers.isEmpty) {
+      _baseSpec.remove('servers');
+    } else {
+      _baseSpec['servers'] = servers;
+    }
+    _baseSpec['x-froggy-docs'] = runtimeExtension;
+  }
+
   final Map<String, dynamic> _baseSpec = {
     "openapi": "3.0.0",
     "info": {
@@ -105,10 +125,10 @@ class ParserEngine {
     return line.replaceFirst(RegExp(r'^$prefix\s*'), '').trim();
   }
 
-  void removeFile(String filePath) {
+  void removeFile(String filePath, {bool writeOutput = true}) {
     if (_fileRegistry.containsKey(filePath)) {
       _fileRegistry.remove(filePath);
-      _generateSwaggerFile();
+      if (writeOutput) _generateSwaggerFile();
     }
   }
 
@@ -143,7 +163,7 @@ class ParserEngine {
     appJsonMap['example'] = jsonData;
   }
 
-  void parseFile(String filePath) {
+  void parseFile(String filePath, {bool writeOutput = true}) {
     _errors.clear();
 
     if (filePath.contains('frontend/') || filePath.contains('.dart_tool')) {
@@ -152,7 +172,7 @@ class ParserEngine {
 
     final file = File(filePath);
     if (!file.existsSync()) {
-      removeFile(filePath);
+      removeFile(filePath, writeOutput: writeOutput);
       return;
     }
 
@@ -224,8 +244,7 @@ class ParserEngine {
             responseSchemas,
           );
         } catch (e) {
-          _errors
-              .add('Invalid JSON in @response-json at line $lineNumber: $e');
+          _errors.add('Invalid JSON in @response-json at line $lineNumber: $e');
         }
         responseJsonBuffer.clear();
       }
@@ -326,6 +345,22 @@ class ParserEngine {
             },
           });
         }
+        final pathParamMatches = RegExp(r'\{(\w+)\}').allMatches(path);
+        for (final match in pathParamMatches) {
+          final paramName = match.group(1)!;
+          if (!parameters.any(
+            (p) => p['name'] == paramName && p['in'] == 'path',
+          )) {
+            parameters.insert(0, {
+              "name": paramName,
+              "in": "path",
+              "required": true,
+              "description": '',
+              "schema": {"type": "string"},
+            });
+          }
+        }
+
         if (parameters.isNotEmpty) {
           endpointData['parameters'] = parameters;
         }
@@ -341,11 +376,23 @@ class ParserEngine {
           }
           for (var field in requestFileFields) {
             final fieldName = field['name']!;
-            properties[fieldName] = {
-              "type": "string",
-              "format": "binary",
-              "description": field['desc'] ?? '',
-            };
+            final fileType = (field['type'] ?? 'binary').toLowerCase();
+            final isMultiple =
+                fileType == 'binary[]' ||
+                fileType == 'array' ||
+                fileType == 'files' ||
+                fileType == 'multiple';
+            properties[fieldName] = isMultiple
+                ? {
+                    "type": "array",
+                    "items": {"type": "string", "format": "binary"},
+                    "description": field['desc'] ?? '',
+                  }
+                : {
+                    "type": "string",
+                    "format": "binary",
+                    "description": field['desc'] ?? '',
+                  };
           }
 
           if (requestFileFields.isNotEmpty) {
@@ -466,7 +513,10 @@ class ParserEngine {
         flushEndpoint();
         if (parts.length >= 3) {
           currentMethod = parts[1].toUpperCase();
-          currentPath = parts[2];
+          currentPath = parts[2].replaceAllMapped(
+            RegExp(r':(\w+)'),
+            (m) => '{${m.group(1)}}',
+          );
         } else {
           _errors.add('@api requires method and path at line $lineNumber');
         }
@@ -495,9 +545,7 @@ class ParserEngine {
             'desc': fieldDesc,
           });
         } else {
-          _errors.add(
-            '@body requires field name and type at line $lineNumber',
-          );
+          _errors.add('@body requires field name and type at line $lineNumber');
         }
       } else if (tag == '@file') {
         if (parts.length >= 3) {
@@ -510,9 +558,7 @@ class ParserEngine {
             'desc': fieldDesc,
           });
         } else {
-          _errors.add(
-            '@file requires field name and type at line $lineNumber',
-          );
+          _errors.add('@file requires field name and type at line $lineNumber');
         }
       } else if (tag == '@body-file') {
         if (parts.length >= 2) {
@@ -541,8 +587,9 @@ class ParserEngine {
         if (parts.length >= 3) {
           pendingResponseCode = parts[1];
           final responseType = parts[2];
-          final responseDesc =
-              parts.length > 3 ? parts.sublist(3).join(' ') : '';
+          final responseDesc = parts.length > 3
+              ? parts.sublist(3).join(' ')
+              : '';
           final lowerType = responseType.toLowerCase();
           final schemaType = (lowerType == 'array') ? 'array' : 'object';
           responseSchemas[pendingResponseCode!] = {
@@ -588,8 +635,7 @@ class ParserEngine {
           String? defaultValue;
 
           final rest = parts.length > 3 ? parts.sublist(3).join(' ') : '';
-          final defaultMatch =
-              RegExp(r'\(default:\s*(.+?)\)').firstMatch(rest);
+          final defaultMatch = RegExp(r'\(default:\s*(.+?)\)').firstMatch(rest);
           if (defaultMatch != null) {
             defaultValue = defaultMatch.group(1);
             desc = rest.replaceFirst(defaultMatch.group(0)!, '').trim();
@@ -604,24 +650,16 @@ class ParserEngine {
             'default': defaultValue,
           });
         } else {
-          _errors.add(
-            '@query requires name and type at line $lineNumber',
-          );
+          _errors.add('@query requires name and type at line $lineNumber');
         }
       } else if (tag == '@header') {
         if (parts.length >= 3) {
           final name = parts[1];
           final type = parts[2];
           final desc = parts.length > 3 ? parts.sublist(3).join(' ') : '';
-          headerParams.add({
-            'name': name,
-            'type': type,
-            'desc': desc,
-          });
+          headerParams.add({'name': name, 'type': type, 'desc': desc});
         } else {
-          _errors.add(
-            '@header requires name and type at line $lineNumber',
-          );
+          _errors.add('@header requires name and type at line $lineNumber');
         }
       }
     }
@@ -636,12 +674,15 @@ class ParserEngine {
 
     if (fileEndpoints.isNotEmpty) {
       _fileRegistry[filePath] = fileEndpoints;
-      _generateSwaggerFile();
+      if (writeOutput) _generateSwaggerFile();
     } else if (_fileRegistry.containsKey(filePath)) {
       _fileRegistry.remove(filePath);
-      _generateSwaggerFile();
+      if (writeOutput) _generateSwaggerFile();
     }
   }
+
+  /// Writes the current registry once after a batch of files has been parsed.
+  void writeOutput() => _generateSwaggerFile();
 
   void _generateSwaggerFile() {
     final Map<String, dynamic> fullPaths = {};
@@ -659,8 +700,11 @@ class ParserEngine {
 
     _baseSpec['paths'] = fullPaths;
 
-    if (_tags.isNotEmpty) {
-      _baseSpec['tags'] = _tags.map((t) => {"name": t}).toList();
+    final tags = _collectTags(fullPaths);
+    if (tags.isNotEmpty) {
+      _baseSpec['tags'] = tags.map((tag) => {"name": tag}).toList();
+    } else {
+      _baseSpec.remove('tags');
     }
 
     final swaggerFile = File(_outputPath);
@@ -690,10 +734,26 @@ class ParserEngine {
     }
     final spec = Map<String, dynamic>.from(_baseSpec);
     spec['paths'] = fullPaths;
-    if (_tags.isNotEmpty) {
-      spec['tags'] = _tags.map((t) => {"name": t}).toList();
+    final tags = _collectTags(fullPaths);
+    if (tags.isNotEmpty) {
+      spec['tags'] = tags.map((tag) => {"name": tag}).toList();
+    } else {
+      spec.remove('tags');
     }
     return spec;
+  }
+
+  Set<String> _collectTags(Map<String, dynamic> paths) {
+    final tags = <String>{};
+    for (final methods in paths.values.whereType<Map>()) {
+      for (final endpoint in methods.values.whereType<Map>()) {
+        final endpointTags = endpoint['tags'];
+        if (endpointTags is List) {
+          tags.addAll(endpointTags.map((tag) => tag.toString()));
+        }
+      }
+    }
+    return tags;
   }
 
   void clearRegistry() {

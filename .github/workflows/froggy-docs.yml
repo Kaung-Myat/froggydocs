@@ -38,12 +38,12 @@ jobs:
         run: dart test
 
       - name: Build FroggyDocs
-        run: dart run bin/froggy_docs.dart build --output docs/froggy_docs.json
+        run: dart run bin/froggy_docs.dart build --output dist/pages --base-path /froggydocs/
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: frontend/web/
+          path: dist/pages/
 
   deploy:
     needs: build

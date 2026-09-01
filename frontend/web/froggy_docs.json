@@ -387,6 +387,40 @@
           }
         }
       }
+    },
+    "/api/users/{id}": {
+      "get": {
+        "summary": "Get one user",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/tagged": {
+      "get": {
+        "summary": "No description",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        },
+        "tags": [
+          "Temporary"
+        ]
+      }
     }
   },
   "components": {
@@ -413,6 +447,9 @@
     },
     {
       "name": "Test"
+    },
+    {
+      "name": "Temporary"
     }
   ]
 }

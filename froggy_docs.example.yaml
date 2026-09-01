@@ -1,0 +1,31 @@
+project:
+  title: HR Mobile API
+  version: 1.0.0
+  description: Internal API reference for backend, mobile, web, and QA teams.
+
+docs:
+  basePath: /docs/api/
+  outputDirectory: dist
+  defaultEnvironment: Staging
+
+server:
+  port: 8080
+  proxy: http://localhost:3000
+
+output:
+  file: frontend/web/froggy_docs.json
+
+servers:
+  - name: Local
+    url: http://localhost:3000
+    environment: development
+
+  - name: Staging
+    url: https://staging-api.example.com
+    environment: staging
+
+  - name: Production
+    url: https://api.example.com
+    environment: production
+    readOnly: true
+    confirmMutations: true

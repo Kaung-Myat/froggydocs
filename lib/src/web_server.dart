@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:typed_data';
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
@@ -9,21 +10,38 @@ import 'package:path/path.dart' as p;
 import 'package:http/http.dart' as http;
 
 const defaultPort = 8080;
+// Allows several files in one multipart request while retaining a bounded body.
+const maxUploadBytes = 50 * 1024 * 1024;
+const maxProxyResponseBytes = 10 * 1024 * 1024;
+const proxyTimeout = Duration(seconds: 30);
 
 String _proxyUrl = '';
+String _docsBasePath = '/';
+String? _resolvedPackageRoot;
 
-Future<void> startServer({int port = defaultPort, String proxyUrl = ''}) async {
+Future<void> startServer({
+  int port = defaultPort,
+  String proxyUrl = '',
+  String basePath = '/',
+}) async {
   _proxyUrl = proxyUrl;
-  
+  _docsBasePath = _normalizeBasePath(basePath);
+  final packageUri = await Isolate.resolvePackageUri(
+    Uri.parse('package:froggy_docs/froggy_docs.dart'),
+  );
+  if (packageUri != null && packageUri.scheme == 'file') {
+    _resolvedPackageRoot = p.dirname(p.dirname(packageUri.toFilePath()));
+  }
+
   final handler = const Pipeline()
       .addMiddleware(logRequests())
       .addHandler(_router.call);
 
   final server = await shelf_io.serve(handler, 'localhost', port);
-  print(
-    '🐸 FroggyDocs server running at http://${server.address.host}:${server.port}',
-  );
-  print('📖 Open http://${server.address.host}:${server.port} in your browser');
+  final docsUrl =
+      'http://${server.address.host}:${server.port}${_docsBasePath == '/' ? '/' : _docsBasePath}';
+  print('🐸 FroggyDocs server running at $docsUrl');
+  print('📖 Open $docsUrl in your browser');
 }
 
 const _corsHeaders = {
@@ -38,157 +56,164 @@ String get _packageDir {
   return p.dirname(exeDir);
 }
 
-String get webDir => p.join(_packageDir, 'frontend', 'web');
-String get deployDir => p.join(_packageDir, 'frontend', 'deploy', 'web');
-
 String get userWebDir => p.join(Directory.current.path, 'frontend', 'web');
+
+Iterable<String> get _assetRoots sync* {
+  final configuredRoot = Platform.environment['FROGGY_DOCS_WEB_DIR'];
+  if (configuredRoot != null && configuredRoot.isNotEmpty) {
+    yield configuredRoot;
+  }
+
+  yield userWebDir;
+  yield p.join(Directory.current.path, 'frontend', 'deploy', 'web');
+  if (_resolvedPackageRoot != null) {
+    yield p.join(_resolvedPackageRoot!, 'frontend', 'web');
+    yield p.join(_resolvedPackageRoot!, 'frontend', 'deploy', 'web');
+  }
+
+  final executableDir = File(Platform.resolvedExecutable).parent.path;
+  yield p.join(executableDir, 'frontend', 'web');
+  yield p.join(executableDir, 'frontend', 'deploy', 'web');
+  yield p.join(_packageDir, 'frontend', 'web');
+  yield p.join(_packageDir, 'frontend', 'deploy', 'web');
+}
+
+File? _findAsset(String relativePath) {
+  final normalized = p.posix.normalize(relativePath.replaceAll('\\', '/'));
+  if (normalized == '..' || normalized.startsWith('../')) return null;
+  for (final root in _assetRoots) {
+    final file = File(p.join(root, normalized));
+    if (file.existsSync()) return file;
+  }
+  return null;
+}
 
 Router get _router {
   final router = Router();
 
-  router.get('/froggy_docs.json', (Request request) async {
-    var file = File(p.join(userWebDir, 'froggy_docs.json'));
-    if (file.existsSync()) {
-      return Response.ok(
-        file.openRead(),
-        headers: {'Content-Type': 'application/json'},
-      );
-    }
-    file = File(p.join(webDir, 'froggy_docs.json'));
-    if (file.existsSync()) {
-      return Response.ok(
-        file.openRead(),
-        headers: {'Content-Type': 'application/json'},
-      );
-    }
-    return Response.notFound('{"error": "Not found"}');
-  });
-
-  router.get('/', (Request request) async {
-    final indexFile = File(p.join(webDir, 'index.html'));
-    if (indexFile.existsSync()) {
-      return Response.ok(
-        indexFile.openRead(),
-        headers: {'Content-Type': 'text/html'},
-      );
-    }
-    return Response.notFound('index.html not found');
-  });
-
-  router.post('/api/simple', (Request request) async {
-    final body = await request.readAsString();
-    return Response.ok(
-      jsonEncode({
-        'status': 'success',
-        'received': body.isNotEmpty ? jsonDecode(body) : {},
-      }),
-      headers: {'Content-Type': 'application/json'},
+  if (_docsBasePath == '/') {
+    router.get('/', (Request request) => _serveAsset('index.html'));
+    router.get(
+      '/froggy_docs.json',
+      (Request request) => _serveAsset('froggy_docs.json'),
     );
-  });
-
-  router.post('/api/me', (Request request) async {
-    return Response.ok(
-      jsonEncode({
-        'message': 'Logged in',
-        'user': {'email': 'test@example.com', 'id': 1},
-      }),
-      headers: {'Content-Type': 'application/json'},
+  } else {
+    final withoutTrailingSlash = _docsBasePath.substring(
+      0,
+      _docsBasePath.length - 1,
     );
-  });
-
-  router.put('/api/inline-json', (Request request) async {
-    return Response.ok(
-      jsonEncode({
-        'status': 'updated',
-        'timestamp': DateTime.now().toIso8601String(),
-      }),
-      headers: {'Content-Type': 'application/json'},
+    router.get(
+      '/',
+      (Request request) => Response.movedPermanently(_docsBasePath),
     );
-  });
-
-  router.post('/api/upload', (Request request) async {
-    final contentType = request.headers['content-type'] ?? '';
-    if (contentType.contains('multipart/form-data')) {
-      return Response.ok(
-        jsonEncode({
-          'status': 'success',
-          'message': 'File upload received (multipart/form-data)',
-        }),
-        headers: {'Content-Type': 'application/json'},
-      );
-    }
-    final body = await request.readAsString();
-    return Response.ok(
-      jsonEncode({
-        'status': 'success',
-        'received': body.isNotEmpty ? jsonDecode(body) : {},
-      }),
-      headers: {'Content-Type': 'application/json'},
+    router.get(
+      withoutTrailingSlash,
+      (Request request) => Response.movedPermanently(_docsBasePath),
     );
-  });
+    router.get(_docsBasePath, (Request request) => _serveAsset('index.html'));
+    router.get(
+      '${_docsBasePath}froggy_docs.json',
+      (Request request) => _serveAsset('froggy_docs.json'),
+    );
+  }
 
-  router.get(
-    '/api/simple',
-    (Request request) => Response.ok(
-      '{"message": "GET works"}',
-      headers: {'Content-Type': 'application/json'},
-    ),
-  );
-  router.get(
-    '/api/me',
-    (Request request) => Response.ok(
-      '{"message": "GET /api/me"}',
-      headers: {'Content-Type': 'application/json'},
-    ),
-  );
-  router.get(
-    '/api/inline-json',
-    (Request request) => Response.ok(
-      '{"message": "GET /api/inline-json"}',
-      headers: {'Content-Type': 'application/json'},
-    ),
-  );
-  router.delete(
-    '/api/simple',
-    (Request request) => Response.ok(
-      '{"message": "Deleted"}',
-      headers: {'Content-Type': 'application/json'},
-    ),
-  );
-
-  router.all('/api/<path.*>', (Request request, String path) async {
+  router.get('/uploads/<path|.*>', (Request request, String path) async {
     if (_proxyUrl.isEmpty) {
-      return Response.notFound('{"error": "Proxy not configured. Use --proxy http://localhost:3000"');
+      return Response.notFound(
+        jsonEncode({'error': 'Media proxy is not configured'}),
+        headers: {'Content-Type': 'application/json', ..._corsHeaders},
+      );
     }
 
+    final client = http.Client();
     try {
-      final targetUrl = '$_proxyUrl/api/$path';
+      final proxyBase = _proxyUrl.endsWith('/')
+          ? _proxyUrl.substring(0, _proxyUrl.length - 1)
+          : _proxyUrl;
+      var targetUri = Uri.parse('$proxyBase/uploads/$path');
+      if (request.requestedUri.hasQuery) {
+        targetUri = targetUri.replace(query: request.requestedUri.query);
+      }
+      final streamedResponse = await client
+          .send(http.Request('GET', targetUri))
+          .timeout(proxyTimeout);
+      final responseBody = await _readLimitedResponseBytes(
+        streamedResponse.stream,
+      ).timeout(proxyTimeout);
+
+      return Response(
+        streamedResponse.statusCode,
+        body: responseBody,
+        headers: {
+          'Content-Type':
+              streamedResponse.headers['content-type'] ??
+              'application/octet-stream',
+          'Cache-Control':
+              streamedResponse.headers['cache-control'] ??
+              'private, max-age=60',
+          ..._corsHeaders,
+        },
+      );
+    } on TimeoutException {
+      return Response(
+        HttpStatus.gatewayTimeout,
+        body: jsonEncode({'error': 'Media proxy request timed out'}),
+        headers: {'Content-Type': 'application/json', ..._corsHeaders},
+      );
+    } catch (e) {
+      return Response.internalServerError(
+        body: jsonEncode({'error': 'Media proxy error: $e'}),
+        headers: {'Content-Type': 'application/json', ..._corsHeaders},
+      );
+    } finally {
+      client.close();
+    }
+  });
+
+  router.all('/api/<path|.*>', (Request request, String path) async {
+    if (request.method == 'OPTIONS') {
+      return Response.ok('', headers: _corsHeaders);
+    }
+
+    if (_proxyUrl.isEmpty) {
+      return Response.notFound(
+        jsonEncode({
+          'error': 'Proxy not configured. Use --proxy http://localhost:3000',
+        }),
+        headers: {'Content-Type': 'application/json', ..._corsHeaders},
+      );
+    }
+
+    final client = http.Client();
+    try {
+      final proxyBase = _proxyUrl.endsWith('/')
+          ? _proxyUrl.substring(0, _proxyUrl.length - 1)
+          : _proxyUrl;
+      var targetUri = Uri.parse('$proxyBase/api/$path');
+      if (request.requestedUri.hasQuery) {
+        targetUri = targetUri.replace(query: request.requestedUri.query);
+      }
       final method = request.method;
       final contentType = request.headers['content-type'] ?? '';
 
-      final client = http.Client();
       http.Request req;
 
       if (method == 'GET' || method == 'HEAD') {
-        req = http.Request(method, Uri.parse(targetUrl));
-      } else if (contentType.contains('multipart/form-data')) {
-        // Read as bytes to preserve binary file data.
-        final chunks = <int>[];
-        await for (final chunk in request.read()) {
-          chunks.addAll(chunk);
-        }
-        req = http.Request(method, Uri.parse(targetUrl));
-        req.bodyBytes = Uint8List.fromList(chunks);
+        req = http.Request(method, targetUri);
       } else {
-        final body = await request.readAsString();
-        req = http.Request(method, Uri.parse(targetUrl));
-        if (body.isNotEmpty) {
-          req.body = body;
+        final bodyBytes = await _readLimitedBody(request).timeout(proxyTimeout);
+        req = http.Request(method, targetUri);
+        if (bodyBytes.isNotEmpty) {
+          req.bodyBytes = bodyBytes;
         }
       }
 
       request.headers.forEach((key, value) {
-        if (key.toLowerCase() != 'host') {
+        final lowerKey = key.toLowerCase();
+        if (lowerKey != 'host' &&
+            lowerKey != 'content-length' &&
+            lowerKey != 'transfer-encoding' &&
+            lowerKey != 'connection') {
           req.headers[key] = value;
         }
       });
@@ -197,44 +222,114 @@ Router get _router {
         req.headers['content-type'] = contentType;
       }
 
-      final streamedResponse = await client.send(req);
-      final responseBody = await streamedResponse.stream.bytesToString();
-      
+      final streamedResponse = await client.send(req).timeout(proxyTimeout);
+      final responseBody = await _readLimitedResponse(
+        streamedResponse.stream,
+      ).timeout(proxyTimeout);
+
       return Response(
         streamedResponse.statusCode,
         body: responseBody,
         headers: {
-          'Content-Type': streamedResponse.headers['content-type'] ?? 'application/json',
+          'Content-Type':
+              streamedResponse.headers['content-type'] ?? 'application/json',
           ..._corsHeaders,
         },
       );
+    } on _PayloadTooLargeException {
+      return _payloadTooLarge();
+    } on TimeoutException {
+      return Response(
+        HttpStatus.gatewayTimeout,
+        body: jsonEncode({'error': 'Proxy request timed out'}),
+        headers: {'Content-Type': 'application/json', ..._corsHeaders},
+      );
     } catch (e) {
       return Response.internalServerError(
-        body: '{"error": "Proxy error: $e"}',
-        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'error': 'Proxy error: $e'}),
+        headers: {'Content-Type': 'application/json', ..._corsHeaders},
       );
+    } finally {
+      client.close();
     }
   });
 
-  router.get('/<path|[^/]+>', (Request request, String path) async {
-    var file = File(p.join(deployDir, path));
-    if (file.existsSync()) {
-      return Response.ok(
-        file.openRead(),
-        headers: {'Content-Type': _getContentType(path)},
-      );
-    }
-    file = File(p.join(webDir, path));
-    if (file.existsSync()) {
-      return Response.ok(
-        file.openRead(),
-        headers: {'Content-Type': _getContentType(path)},
-      );
-    }
-    return Response.notFound('File not found: $path');
-  });
+  if (_docsBasePath == '/') {
+    router.get(
+      '/<path|[^/]+>',
+      (Request request, String path) => _serveAsset(path),
+    );
+  } else {
+    router.get(
+      '$_docsBasePath<path|.*>',
+      (Request request, String path) => _serveAsset(path),
+    );
+  }
 
   return router;
+}
+
+Response _serveAsset(String path) {
+  final file = _findAsset(path);
+  if (file == null) return Response.notFound('File not found: $path');
+  return Response.ok(
+    file.openRead(),
+    headers: {'Content-Type': _getContentType(path)},
+  );
+}
+
+String _normalizeBasePath(String value) {
+  final trimmed = value.trim();
+  if (trimmed.isEmpty || trimmed == '/') return '/';
+  return '/${trimmed.replaceAll(RegExp(r'^/+|/+$'), '')}/';
+}
+
+class _PayloadTooLargeException implements Exception {}
+
+Future<Uint8List> _readLimitedBody(Request request) async {
+  final declaredLength = request.contentLength;
+  if (declaredLength != null && declaredLength > maxUploadBytes) {
+    throw _PayloadTooLargeException();
+  }
+
+  final bytes = BytesBuilder(copy: false);
+  var receivedBytes = 0;
+  await for (final chunk in request.read()) {
+    receivedBytes += chunk.length;
+    if (receivedBytes > maxUploadBytes) throw _PayloadTooLargeException();
+    bytes.add(chunk);
+  }
+  return bytes.takeBytes();
+}
+
+Response _payloadTooLarge() => Response(
+  HttpStatus.requestEntityTooLarge,
+  body: jsonEncode({
+    'error':
+        'Request body exceeds the ${maxUploadBytes ~/ (1024 * 1024)} MB limit',
+  }),
+  headers: {'Content-Type': 'application/json', ..._corsHeaders},
+);
+
+Future<String> _readLimitedResponse(Stream<List<int>> stream) async {
+  final bytes = await _readLimitedResponseBytes(stream);
+  return utf8.decode(bytes, allowMalformed: true);
+}
+
+Future<Uint8List> _readLimitedResponseBytes(Stream<List<int>> stream) async {
+  final bytes = BytesBuilder(copy: false);
+  var receivedBytes = 0;
+  await for (final chunk in stream) {
+    receivedBytes += chunk.length;
+    if (receivedBytes > maxProxyResponseBytes) {
+      throw StateError(
+        'Proxy response exceeds the '
+        '${maxProxyResponseBytes ~/ (1024 * 1024)} MB limit',
+      );
+    }
+    bytes.add(chunk);
+  }
+  return bytes.takeBytes();
 }
 
 String _getContentType(String path) {

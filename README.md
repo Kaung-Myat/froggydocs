@@ -21,9 +21,9 @@
 
 ## 🚀 Quick Start
 
-### Via npm (Recommended)
+### Via npm (Beta)
 ```bash
-npm install -g froggy-docs
+npm install -g froggy-docs@beta
 froggy-docs serve
 ```
 
@@ -133,26 +133,48 @@ services:
 
 ## ⚙️ Configuration
 
-Create `.froggyrc` in your project root:
+Create `froggy_docs.yaml` in the API project root. Legacy `.froggyrc` JSON
+files remain supported when a YAML configuration is not present.
 
-```json
-{
-  "server": {
-    "port": 8080,
-    "host": "localhost"
-  },
-  "paths": {
-    "include": ["lib/", "src/", "api/"],
-    "exclude": ["test/", "node_modules/"]
-  },
-  "output": {
-    "format": "openapi",
-    "file": "docs/froggy_docs.json"
-  }
-}
+```yaml
+project:
+  title: HR Mobile API
+  version: 1.0.0
+
+docs:
+  basePath: /docs/api/
+  outputDirectory: dist
+  defaultEnvironment: Staging
+
+servers:
+  - name: Staging
+    url: https://staging-api.example.com
+    environment: staging
+
+  - name: Production
+    url: https://api.example.com
+    environment: production
+    readOnly: true
+    confirmMutations: true
 ```
 
-See: [`.froggyrc.example`](.froggyrc.example)
+See [`froggy_docs.example.yaml`](froggy_docs.example.yaml) for the complete
+configuration.
+
+## Static deployment
+
+Generate a self-contained site:
+
+```bash
+froggy_docs build --project ../your-api --output dist
+```
+
+The resulting directory contains `index.html`, UI assets, encrypted token
+storage support, and `froggy_docs.json`. It can be hosted at `/` or at the
+configured subpath such as `/docs/api/`.
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for Nginx configuration, access control,
+production safety, and a CI/CD outline.
 
 ---
 
@@ -175,9 +197,9 @@ See: [`.froggyrc.example`](.froggyrc.example)
 
 ## 📦 Installation Options
 
-### npm
+### npm beta
 ```bash
-npm install -g froggy-docs
+npm install -g froggy-docs@beta
 ```
 
 ### pip

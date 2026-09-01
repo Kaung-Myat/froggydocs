@@ -18,8 +18,8 @@ bin/*.dill
 .DS_Store
 Thumbs.db
 
-# Test
-test/
+# Test output
+test_output/
 coverage/
 
 # Frontend
