@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const childProcess = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -6,6 +7,18 @@ const path = require('node:path');
 const test = require('node:test');
 
 const wrapper = require('../package.js');
+
+function runVersionVerification(refType, refName) {
+  return childProcess.spawnSync(process.execPath, ['scripts/verify-version.js'], {
+    cwd: path.resolve(__dirname, '..'),
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      GITHUB_REF_TYPE: refType,
+      GITHUB_REF_NAME: refName
+    }
+  });
+}
 
 test('uses a versioned installation directory', () => {
   const original = process.env.FROGGY_DOCS_INSTALL_DIR;
@@ -62,4 +75,18 @@ test('derives binary and checksum URLs from the package version', () => {
   const { binaryUrl, checksumUrl } = wrapper.getReleaseUrls(asset);
   assert.match(binaryUrl, new RegExp(`/v${wrapper.PACKAGE_VERSION}/${asset}$`));
   assert.match(checksumUrl, new RegExp(`/v${wrapper.PACKAGE_VERSION}/checksums\\.txt$`));
+});
+
+test('allows version verification on a normal CI branch', () => {
+  const result = runVersionVerification('branch', 'main');
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('accepts only the matching tag for a release run', () => {
+  const matching = runVersionVerification('tag', `v${wrapper.PACKAGE_VERSION}`);
+  assert.equal(matching.status, 0, matching.stderr);
+
+  const mismatched = runVersionVerification('tag', 'v0.0.0');
+  assert.notEqual(mismatched.status, 0);
+  assert.match(mismatched.stderr, /does not match package version/);
 });

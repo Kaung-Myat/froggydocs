@@ -21,7 +21,11 @@ for (const [source, version] of Object.entries(versions)) {
   }
 }
 
-const tag = process.env.GITHUB_REF_NAME;
+const refType = process.env.GITHUB_REF_TYPE;
+const tag = refType === 'tag' ? process.env.GITHUB_REF_NAME : null;
+if (refType === 'tag' && !tag) {
+  throw new Error('GITHUB_REF_NAME is required for a tag-triggered release');
+}
 if (tag && tag !== `v${packageVersion}`) {
   throw new Error(`Release tag ${tag} does not match package version v${packageVersion}`);
 }
