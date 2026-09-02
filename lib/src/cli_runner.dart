@@ -118,7 +118,12 @@ class CliRunner {
             '🔄 Proxy enabled: API requests will be forwarded to $proxyUrl',
           );
         }
-        await startServer(port: port, proxyUrl: proxyUrl, basePath: basePath);
+        await startServer(
+          port: port,
+          proxyUrl: proxyUrl,
+          basePath: basePath,
+          specificationPath: outputPath,
+        );
         await WatcherEngine(
           outputPath: outputPath,
           ignorePattern: ignorePattern,

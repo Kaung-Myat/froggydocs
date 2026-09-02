@@ -575,4 +575,33 @@ void main() {
       expect(spec['x-froggy-docs']['basePath'], equals('/docs/api/'));
     });
   });
+
+  group('WebServer', () {
+    test('serves the generated project specification explicitly', () async {
+      final specification = File('test_output/project-spec.json');
+      specification.parent.createSync(recursive: true);
+      specification.writeAsStringSync('{"source":"project"}');
+
+      final server = await startServer(
+        port: 0,
+        specificationPath: specification.path,
+      );
+      final client = HttpClient();
+      try {
+        final request = await client.getUrl(
+          Uri.parse(
+            'http://${server.address.host}:${server.port}/froggy_docs.json',
+          ),
+        );
+        final response = await request.close();
+        final body = await utf8.decoder.bind(response).join();
+
+        expect(response.statusCode, equals(HttpStatus.ok));
+        expect(jsonDecode(body), equals({'source': 'project'}));
+      } finally {
+        client.close(force: true);
+        await server.close(force: true);
+      }
+    });
+  });
 }

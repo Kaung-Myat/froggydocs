@@ -2,7 +2,7 @@ name: froggy_docs
 description: >
   Auto-generate API documentation from code annotations. 
   Works with any programming language (JavaScript, Python, Go, Ruby, etc.)
-version: 1.2.0-beta.1
+version: 1.2.0-beta.2
 repository: https://github.com/Kaung-Myat/froggydocs
 homepage: https://github.com/Kaung-Myat/froggydocs
 issue_tracker: https://github.com/Kaung-Myat/froggydocs/issues

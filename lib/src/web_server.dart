@@ -17,15 +17,20 @@ const proxyTimeout = Duration(seconds: 30);
 
 String _proxyUrl = '';
 String _docsBasePath = '/';
+String? _specificationPath;
 String? _resolvedPackageRoot;
 
-Future<void> startServer({
+Future<HttpServer> startServer({
   int port = defaultPort,
   String proxyUrl = '',
   String basePath = '/',
+  String? specificationPath,
 }) async {
   _proxyUrl = proxyUrl;
   _docsBasePath = _normalizeBasePath(basePath);
+  _specificationPath = specificationPath == null
+      ? null
+      : p.absolute(specificationPath);
   final packageUri = await Isolate.resolvePackageUri(
     Uri.parse('package:froggy_docs/froggy_docs.dart'),
   );
@@ -42,6 +47,7 @@ Future<void> startServer({
       'http://${server.address.host}:${server.port}${_docsBasePath == '/' ? '/' : _docsBasePath}';
   print('🐸 FroggyDocs server running at $docsUrl');
   print('📖 Open $docsUrl in your browser');
+  return server;
 }
 
 const _corsHeaders = {
@@ -93,10 +99,7 @@ Router get _router {
 
   if (_docsBasePath == '/') {
     router.get('/', (Request request) => _serveAsset('index.html'));
-    router.get(
-      '/froggy_docs.json',
-      (Request request) => _serveAsset('froggy_docs.json'),
-    );
+    router.get('/froggy_docs.json', (Request request) => _serveSpecification());
   } else {
     final withoutTrailingSlash = _docsBasePath.substring(
       0,
@@ -113,7 +116,7 @@ Router get _router {
     router.get(_docsBasePath, (Request request) => _serveAsset('index.html'));
     router.get(
       '${_docsBasePath}froggy_docs.json',
-      (Request request) => _serveAsset('froggy_docs.json'),
+      (Request request) => _serveSpecification(),
     );
   }
 
@@ -276,6 +279,21 @@ Response _serveAsset(String path) {
     file.openRead(),
     headers: {'Content-Type': _getContentType(path)},
   );
+}
+
+Response _serveSpecification() {
+  final configuredPath = _specificationPath;
+  if (configuredPath != null) {
+    final file = File(configuredPath);
+    if (!file.existsSync()) {
+      return Response.notFound('Specification not found: $configuredPath');
+    }
+    return Response.ok(
+      file.openRead(),
+      headers: {'Content-Type': 'application/json; charset=utf-8'},
+    );
+  }
+  return _serveAsset('froggy_docs.json');
 }
 
 String _normalizeBasePath(String value) {

@@ -1,3 +1,7 @@
+## 1.2.0-beta.2
+
+- Fixed npm-installed `serve` using the packaged sample specification instead of the generated project specification.
+
 ## 1.2.0-beta.1
 
 - Added production-ready static builds with configurable base paths and API environments.
