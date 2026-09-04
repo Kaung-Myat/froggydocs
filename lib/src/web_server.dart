@@ -174,94 +174,15 @@ Router get _router {
   });
 
   router.all('/api/<path|.*>', (Request request, String path) async {
-    if (request.method == 'OPTIONS') {
-      return Response.ok('', headers: _corsHeaders);
-    }
-
-    if (_proxyUrl.isEmpty) {
-      return Response.notFound(
-        jsonEncode({
-          'error': 'Proxy not configured. Use --proxy http://localhost:3000',
-        }),
-        headers: {'Content-Type': 'application/json', ..._corsHeaders},
-      );
-    }
-
-    final client = http.Client();
-    try {
-      final proxyBase = _proxyUrl.endsWith('/')
-          ? _proxyUrl.substring(0, _proxyUrl.length - 1)
-          : _proxyUrl;
-      var targetUri = Uri.parse('$proxyBase/api/$path');
-      if (request.requestedUri.hasQuery) {
-        targetUri = targetUri.replace(query: request.requestedUri.query);
-      }
-      final method = request.method;
-      final contentType = request.headers['content-type'] ?? '';
-
-      http.Request req;
-
-      if (method == 'GET' || method == 'HEAD') {
-        req = http.Request(method, targetUri);
-      } else {
-        final bodyBytes = await _readLimitedBody(request).timeout(proxyTimeout);
-        req = http.Request(method, targetUri);
-        if (bodyBytes.isNotEmpty) {
-          req.bodyBytes = bodyBytes;
-        }
-      }
-
-      request.headers.forEach((key, value) {
-        final lowerKey = key.toLowerCase();
-        if (lowerKey != 'host' &&
-            lowerKey != 'content-length' &&
-            lowerKey != 'transfer-encoding' &&
-            lowerKey != 'connection') {
-          req.headers[key] = value;
-        }
-      });
-
-      if (contentType.contains('multipart/form-data')) {
-        req.headers['content-type'] = contentType;
-      }
-
-      final streamedResponse = await client.send(req).timeout(proxyTimeout);
-      final responseBody = await _readLimitedResponse(
-        streamedResponse.stream,
-      ).timeout(proxyTimeout);
-
-      return Response(
-        streamedResponse.statusCode,
-        body: responseBody,
-        headers: {
-          'Content-Type':
-              streamedResponse.headers['content-type'] ?? 'application/json',
-          ..._corsHeaders,
-        },
-      );
-    } on _PayloadTooLargeException {
-      return _payloadTooLarge();
-    } on TimeoutException {
-      return Response(
-        HttpStatus.gatewayTimeout,
-        body: jsonEncode({'error': 'Proxy request timed out'}),
-        headers: {'Content-Type': 'application/json', ..._corsHeaders},
-      );
-    } catch (e) {
-      return Response.internalServerError(
-        body: jsonEncode({'error': 'Proxy error: $e'}),
-        headers: {'Content-Type': 'application/json', ..._corsHeaders},
-      );
-    } finally {
-      client.close();
-    }
+    return _proxyRequest(request, '/api/$path');
   });
 
   if (_docsBasePath == '/') {
-    router.get(
-      '/<path|[^/]+>',
-      (Request request, String path) => _serveAsset(path),
-    );
+    router.get('/<path|[^/]+>', (Request request, String path) {
+      final asset = _findAsset(path);
+      if (asset != null) return _serveFile(asset, path);
+      return _proxyRequest(request, '/$path');
+    });
   } else {
     router.get(
       '$_docsBasePath<path|.*>',
@@ -269,12 +190,20 @@ Router get _router {
     );
   }
 
+  router.all('/<path|.*>', (Request request, String path) {
+    return _proxyRequest(request, '/$path');
+  });
+
   return router;
 }
 
 Response _serveAsset(String path) {
   final file = _findAsset(path);
   if (file == null) return Response.notFound('File not found: $path');
+  return _serveFile(file, path);
+}
+
+Response _serveFile(File file, String path) {
   return Response.ok(
     file.openRead(),
     headers: {'Content-Type': _getContentType(path)},
@@ -294,6 +223,84 @@ Response _serveSpecification() {
     );
   }
   return _serveAsset('froggy_docs.json');
+}
+
+Future<Response> _proxyRequest(Request request, String targetPath) async {
+  if (request.method == 'OPTIONS') {
+    return Response.ok('', headers: _corsHeaders);
+  }
+  if (_proxyUrl.isEmpty) {
+    return Response.notFound(
+      jsonEncode({
+        'error': 'Proxy not configured. Use --proxy http://localhost:3000',
+      }),
+      headers: {'Content-Type': 'application/json', ..._corsHeaders},
+    );
+  }
+
+  final client = http.Client();
+  try {
+    final proxyBase = _proxyUrl.endsWith('/')
+        ? _proxyUrl.substring(0, _proxyUrl.length - 1)
+        : _proxyUrl;
+    var targetUri = Uri.parse('$proxyBase$targetPath');
+    if (request.requestedUri.hasQuery) {
+      targetUri = targetUri.replace(query: request.requestedUri.query);
+    }
+
+    final upstreamRequest = http.Request(request.method, targetUri);
+    if (request.method != 'GET' && request.method != 'HEAD') {
+      final bodyBytes = await _readLimitedBody(request).timeout(proxyTimeout);
+      if (bodyBytes.isNotEmpty) upstreamRequest.bodyBytes = bodyBytes;
+    }
+    request.headers.forEach((key, value) {
+      const excludedHeaders = {
+        'host',
+        'content-length',
+        'transfer-encoding',
+        'connection',
+      };
+      if (!excludedHeaders.contains(key.toLowerCase())) {
+        upstreamRequest.headers[key] = value;
+      }
+    });
+
+    final upstreamResponse = await client
+        .send(upstreamRequest)
+        .timeout(proxyTimeout);
+    final responseBody = await _readLimitedResponseBytes(
+      upstreamResponse.stream,
+    ).timeout(proxyTimeout);
+    final responseHeaders = <String, String>{
+      'Content-Type':
+          upstreamResponse.headers['content-type'] ?? 'application/json',
+      ..._corsHeaders,
+    };
+    for (final name in ['cache-control', 'content-disposition', 'location']) {
+      final value = upstreamResponse.headers[name];
+      if (value != null) responseHeaders[name] = value;
+    }
+    return Response(
+      upstreamResponse.statusCode,
+      body: responseBody,
+      headers: responseHeaders,
+    );
+  } on _PayloadTooLargeException {
+    return _payloadTooLarge();
+  } on TimeoutException {
+    return Response(
+      HttpStatus.gatewayTimeout,
+      body: jsonEncode({'error': 'Proxy request timed out'}),
+      headers: {'Content-Type': 'application/json', ..._corsHeaders},
+    );
+  } catch (error) {
+    return Response.internalServerError(
+      body: jsonEncode({'error': 'Proxy error: $error'}),
+      headers: {'Content-Type': 'application/json', ..._corsHeaders},
+    );
+  } finally {
+    client.close();
+  }
 }
 
 String _normalizeBasePath(String value) {
@@ -328,11 +335,6 @@ Response _payloadTooLarge() => Response(
   }),
   headers: {'Content-Type': 'application/json', ..._corsHeaders},
 );
-
-Future<String> _readLimitedResponse(Stream<List<int>> stream) async {
-  final bytes = await _readLimitedResponseBytes(stream);
-  return utf8.decode(bytes, allowMalformed: true);
-}
 
 Future<Uint8List> _readLimitedResponseBytes(Stream<List<int>> stream) async {
   final bytes = BytesBuilder(copy: false);

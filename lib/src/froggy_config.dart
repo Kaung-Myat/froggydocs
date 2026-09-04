@@ -42,6 +42,10 @@ class FroggyConfig {
     this.specOutput = 'frontend/web/froggy_docs.json',
     this.port = 8080,
     this.proxyUrl = '',
+    this.specPath = '',
+    this.specUrl = '',
+    this.specHeaderEnvironment = '',
+    this.specPollIntervalSeconds = 10,
     this.servers = const [],
   });
 
@@ -54,6 +58,10 @@ class FroggyConfig {
   final String specOutput;
   final int port;
   final String proxyUrl;
+  final String specPath;
+  final String specUrl;
+  final String specHeaderEnvironment;
+  final int specPollIntervalSeconds;
   final List<ApiServerConfig> servers;
 
   static FroggyConfig load([String directory = '.']) {
@@ -85,6 +93,7 @@ class FroggyConfig {
     final docs = _stringMap(map['docs']);
     final server = _stringMap(map['server']);
     final output = _stringMap(map['output']);
+    final input = _stringMap(map['input']);
     final rawServers = map['servers'];
     final servers = <ApiServerConfig>[];
     if (rawServers is List) {
@@ -123,6 +132,10 @@ class FroggyConfig {
       specOutput: output['file']?.toString() ?? 'frontend/web/froggy_docs.json',
       port: _intValue(server['port'], 8080),
       proxyUrl: legacyProxy,
+      specPath: input['spec']?.toString() ?? '',
+      specUrl: input['specUrl']?.toString() ?? '',
+      specHeaderEnvironment: input['specHeaderEnv']?.toString() ?? '',
+      specPollIntervalSeconds: _intValue(input['pollIntervalSeconds'], 10),
       servers: servers,
     );
   }

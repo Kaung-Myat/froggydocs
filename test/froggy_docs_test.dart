@@ -574,6 +574,227 @@ void main() {
       expect(spec['servers'], hasLength(1));
       expect(spec['x-froggy-docs']['basePath'], equals('/docs/api/'));
     });
+
+    test('parses an OpenAPI input source and polling configuration', () {
+      final config = FroggyConfig.fromMap({
+        'input': {
+          'specUrl': 'https://api.example.com/openapi.json',
+          'specHeaderEnv': 'OPENAPI_HEADER',
+          'pollIntervalSeconds': 30,
+        },
+      });
+
+      expect(config.specPath, isEmpty);
+      expect(config.specUrl, equals('https://api.example.com/openapi.json'));
+      expect(config.specHeaderEnvironment, equals('OPENAPI_HEADER'));
+      expect(config.specPollIntervalSeconds, equals(30));
+    });
+  });
+
+  group('OpenApiSpecLoader', () {
+    test('loads YAML and adds FroggyDocs runtime configuration', () {
+      final loader = OpenApiSpecLoader(
+        basePath: '/docs/api/',
+        defaultEnvironment: 'Staging',
+      );
+      addTearDown(loader.close);
+
+      final spec = loader.parse(
+        utf8.encode('''
+openapi: 3.1.0
+info:
+  title: Imported API
+  version: 2.0.0
+paths:
+  /users:
+    get:
+      responses:
+        "200":
+          description: Success
+'''),
+        source: 'openapi.yaml',
+      );
+
+      expect(spec['openapi'], equals('3.1.0'));
+      expect(spec['paths'], contains('/users'));
+      expect(spec['x-froggy-docs']['basePath'], equals('/docs/api/'));
+      expect(spec['x-froggy-docs']['defaultEnvironment'], equals('Staging'));
+    });
+
+    test('resolves internal component references for the UI', () {
+      final loader = OpenApiSpecLoader();
+      addTearDown(loader.close);
+      final spec = loader.parse(
+        utf8.encode(
+          jsonEncode({
+            'openapi': '3.0.3',
+            'info': {'title': 'Reference API', 'version': '1.0.0'},
+            'paths': {
+              '/users': {
+                'post': {
+                  'requestBody': {
+                    'content': {
+                      'application/json': {
+                        'schema': {r'$ref': '#/components/schemas/User'},
+                      },
+                    },
+                  },
+                  'responses': {
+                    '200': {'description': 'Success'},
+                  },
+                },
+              },
+            },
+            'components': {
+              'schemas': {
+                'User': {
+                  'type': 'object',
+                  'properties': {
+                    'name': {'type': 'string'},
+                  },
+                },
+              },
+            },
+          }),
+        ),
+        source: 'openapi.json',
+      );
+
+      final schema =
+          spec['paths']['/users']['post']['requestBody']['content']['application/json']['schema'];
+      expect(schema['type'], equals('object'));
+      expect(schema['properties']['name']['type'], equals('string'));
+    });
+
+    test('normalizes path parameters and inherited security for the UI', () {
+      final loader = OpenApiSpecLoader();
+      addTearDown(loader.close);
+      final spec = loader.parse(
+        utf8.encode(
+          jsonEncode({
+            'openapi': '3.0.3',
+            'info': {'title': 'Normalized API', 'version': '1.0.0'},
+            'security': [
+              {'bearerAuth': <dynamic>[]},
+            ],
+            'paths': {
+              '/users/{id}': {
+                'summary': 'User operations',
+                'parameters': [
+                  {
+                    'name': 'id',
+                    'in': 'path',
+                    'required': true,
+                    'schema': {'type': 'string'},
+                  },
+                ],
+                'get': {
+                  'parameters': [
+                    {
+                      'name': 'expand',
+                      'in': 'query',
+                      'schema': {'type': 'boolean'},
+                    },
+                  ],
+                  'responses': {
+                    '200': {
+                      'description': 'Success',
+                      'content': {
+                        'application/problem+json': {
+                          'examples': {
+                            'default': {
+                              'value': {'id': '123'},
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          }),
+        ),
+        source: 'normalized.json',
+      );
+
+      final pathItem = spec['paths']['/users/{id}'];
+      expect(pathItem.keys, equals(['get']));
+      expect(pathItem['get']['parameters'], hasLength(2));
+      expect(pathItem['get']['security'], isNotEmpty);
+      expect(
+        pathItem['get']['responses']['200']['content']['application/json']['example']['id'],
+        equals('123'),
+      );
+    });
+
+    test('rejects Swagger 2.0 and unresolved references', () {
+      final loader = OpenApiSpecLoader();
+      addTearDown(loader.close);
+
+      expect(
+        () => loader.parse(
+          utf8.encode(
+            jsonEncode({
+              'swagger': '2.0',
+              'info': {'title': 'Legacy', 'version': '1.0.0'},
+              'paths': {},
+            }),
+          ),
+          source: 'swagger.json',
+        ),
+        throwsA(isA<FormatException>()),
+      );
+      expect(
+        () => loader.parse(
+          utf8.encode(
+            jsonEncode({
+              'openapi': '3.0.3',
+              'info': {'title': 'Broken', 'version': '1.0.0'},
+              'paths': {},
+              'components': {
+                'schemas': {
+                  'Broken': {r'$ref': '#/components/schemas/Missing'},
+                },
+              },
+            }),
+          ),
+          source: 'broken.json',
+        ),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('downloads a protected remote specification', () async {
+      String? receivedAuthorization;
+      final upstream = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      upstream.listen((request) {
+        receivedAuthorization = request.headers.value('authorization');
+        request.response
+          ..headers.contentType = ContentType.json
+          ..write(
+            jsonEncode({
+              'openapi': '3.0.3',
+              'info': {'title': 'Remote API', 'version': '1.0.0'},
+              'paths': {},
+            }),
+          )
+          ..close();
+      });
+
+      final loader = OpenApiSpecLoader();
+      try {
+        final spec = await loader.loadUrl(
+          Uri.parse('http://127.0.0.1:${upstream.port}/openapi.json'),
+          headers: const {'Authorization': 'Bearer test-token'},
+        );
+        expect(spec['info']['title'], equals('Remote API'));
+        expect(receivedAuthorization, equals('Bearer test-token'));
+      } finally {
+        loader.close();
+        await upstream.close(force: true);
+      }
+    });
   });
 
   group('WebServer', () {
@@ -601,6 +822,50 @@ void main() {
       } finally {
         client.close(force: true);
         await server.close(force: true);
+      }
+    });
+
+    test('proxies API paths that do not start with /api', () async {
+      final upstream = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      upstream.listen((request) async {
+        final body = await utf8.decoder.bind(request).join();
+        request.response
+          ..headers.contentType = ContentType.json
+          ..write(
+            jsonEncode({
+              'method': request.method,
+              'path': request.uri.path,
+              'query': request.uri.query,
+              'body': body,
+            }),
+          )
+          ..close();
+      });
+      final server = await startServer(
+        port: 0,
+        proxyUrl: 'http://127.0.0.1:${upstream.port}',
+      );
+      final client = HttpClient();
+      try {
+        final request = await client.postUrl(
+          Uri.parse(
+            'http://${server.address.host}:${server.port}/v1/items?draft=true',
+          ),
+        );
+        request.headers.contentType = ContentType.json;
+        request.write('{"name":"frog"}');
+        final response = await request.close();
+        final decoded = jsonDecode(await utf8.decoder.bind(response).join());
+
+        expect(response.statusCode, equals(HttpStatus.ok));
+        expect(decoded['method'], equals('POST'));
+        expect(decoded['path'], equals('/v1/items'));
+        expect(decoded['query'], equals('draft=true'));
+        expect(decoded['body'], equals('{"name":"frog"}'));
+      } finally {
+        client.close(force: true);
+        await server.close(force: true);
+        await upstream.close(force: true);
       }
     });
   });

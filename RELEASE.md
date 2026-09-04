@@ -39,7 +39,7 @@ npm test
 npm pack --dry-run
 ```
 
-For a beta release, use a prerelease version such as `1.2.0-beta.2`. The
+For a beta release, use a prerelease version such as `1.3.0-beta.1`. The
 workflow publishes prerelease versions with the npm `beta` distribution tag;
 stable versions use `latest`.
 
@@ -48,8 +48,8 @@ stable versions use `latest`.
 After merging the release commit to `main`:
 
 ```bash
-git tag v1.2.0-beta.2
-git push origin v1.2.0-beta.2
+git tag v1.3.0-beta.1
+git push origin v1.3.0-beta.1
 ```
 
 The release workflow performs the following operations in order:

@@ -196,11 +196,17 @@ Options:
   --dist <path>           Static deployment output directory
   --base-path <path>      Documentation path such as /docs/api/
   --project <path>        API project directory to scan
+  --spec <path>           Local OpenAPI 3.0/3.1 JSON or YAML file
+  --spec-url <url>        URL that returns an OpenAPI 3.0/3.1 document
+  --spec-header-env <var> Environment variable containing a Name: Value header
+  --spec-poll-interval <s> Seconds between remote specification reloads
 
 Examples:
   froggy-docs serve --project ./my-api --proxy http://localhost:3000
   froggy-docs build --project ./my-api --output dist
   froggy-docs serve --project ./my-api --base-path /docs/api/
+  froggy-docs serve --spec ./openapi.yaml
+  froggy-docs serve --spec-url http://localhost:8000/openapi.json
 `);
 }
 

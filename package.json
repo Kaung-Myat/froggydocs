@@ -1,7 +1,7 @@
 {
   "name": "froggy-docs",
-  "version": "1.2.0-beta.2",
-  "description": "Language-agnostic API documentation, testing, and static deployment from source annotations.",
+  "version": "1.3.0-beta.1",
+  "description": "Universal OpenAPI documentation, testing, live proxying, and static deployment.",
   "author": "Kaung Mrat Thu <kaungmratthu.dev@gmail.com>",
   "homepage": "https://github.com/Kaung-Myat/froggydocs",
   "repository": {
@@ -27,6 +27,7 @@
     "package.js",
     "frontend/web/",
     "README.md",
+    "docs/openapi.md",
     "CHANGELOG.md",
     "DEPLOYMENT.md",
     "RELEASE.md",

@@ -1,8 +1,8 @@
 # FroggyDocs
 
-Language-agnostic API documentation generated from source annotations. FroggyDocs scans your project, produces an OpenAPI 3.0 specification, and serves an interactive documentation UI with request testing, live reload, backend proxying, and static site export.
+Language-agnostic API documentation from OpenAPI JSON/YAML, live OpenAPI URLs, or source annotations. FroggyDocs serves an interactive documentation UI with request testing, live reload, backend proxying, and static site export.
 
-**Current version:** `1.2.0-beta.2`
+**Current version:** `1.3.0-beta.1`
 
 [![Pub](https://img.shields.io/pub/v/froggy_docs.svg)](https://pub.dev/package/froggy_docs)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -15,6 +15,9 @@ Repository: [Kaung-Myat/froggydocs](https://github.com/Kaung-Myat/froggydocs)
 ## Features
 
 - Annotation-driven OpenAPI 3.0 generation from comments in many languages
+- Local OpenAPI 3.0/3.1 JSON and YAML input with `--spec`
+- Remote OpenAPI input and polling with `--spec-url`
+- Internal `$ref` validation and expansion for the documentation UI
 - Interactive documentation UI with try-it-out requests
 - Live regeneration while source files change (`serve` and `watch`)
 - Optional reverse proxy from the docs server to a local or remote API
@@ -57,13 +60,38 @@ docker run --rm -p 8080:8080 -v "$(pwd):/app" -w /app froggy-docs serve --projec
 
 ### Standalone binaries
 
-Download platform assets from the [GitHub Releases](https://github.com/Kaung-Myat/froggydocs/releases) page for the matching version tag (for example `v1.2.0-beta.2`).
+Download platform assets from the [GitHub Releases](https://github.com/Kaung-Myat/froggydocs/releases) page for the matching version tag (for example `v1.3.0-beta.1`).
 
 ---
 
 ## Quick start
 
-### 1. Annotate an endpoint
+Choose one input mode. If no input option is provided, FroggyDocs keeps using annotation scanning for backward compatibility.
+
+### OpenAPI file
+
+```bash
+froggy-docs serve --spec ./openapi.yaml --proxy http://127.0.0.1:3000
+froggy-docs build --spec ./openapi.json --output dist
+```
+
+### OpenAPI URL
+
+```bash
+# FastAPI
+froggy-docs serve \
+  --spec-url http://127.0.0.1:8000/openapi.json \
+  --proxy http://127.0.0.1:8000
+
+# Spring Boot with springdoc-openapi
+froggy-docs serve \
+  --spec-url http://127.0.0.1:8080/v3/api-docs \
+  --proxy http://127.0.0.1:8080
+```
+
+### Source annotations
+
+#### 1. Annotate an endpoint
 
 ```javascript
 // @api POST /api/users
@@ -77,11 +105,11 @@ app.post('/api/users', async (req, res) => {
 });
 ```
 
-### 2. Add project configuration (optional but recommended)
+#### 2. Add project configuration (optional but recommended)
 
 Copy [`froggy_docs.example.yaml`](froggy_docs.example.yaml) into your API project as `froggy_docs.yaml`.
 
-### 3. Serve documentation
+#### 3. Serve documentation
 
 ```bash
 # From an API project directory
@@ -115,6 +143,10 @@ Open `http://localhost:8080` in a browser.
 | `--base-path <path>` | Documentation URL base path (example: `/docs/api/`) |
 | `--ignore <glob>` | Glob pattern excluded from watching |
 | `--project <path>` | API project directory to scan (default: current directory) |
+| `--spec <path>` | Read a local OpenAPI 3.0/3.1 JSON or YAML file |
+| `--spec-url <url>` | Download an OpenAPI 3.0/3.1 document over HTTP/HTTPS |
+| `--spec-header-env <name>` | Read one protected URL header (`Name: Value`) from an environment variable |
+| `--spec-poll-interval <seconds>` | Remote reload interval; minimum `2`, default `10` |
 | `-h, --help` | Show help |
 
 ### Examples
@@ -125,7 +157,23 @@ froggy-docs serve --project ../my-api --base-path /docs/api/
 froggy-docs watch --project ../my-api
 froggy-docs build --project ../my-api --output dist
 froggy-docs build --project ../my-api --dist public/docs/api
+froggy-docs serve --spec ../my-api/openapi.yaml
+froggy-docs build --spec ../my-api/openapi.json --output public/docs
+froggy-docs serve --spec-url http://127.0.0.1:8000/openapi.json --proxy http://127.0.0.1:8000
 ```
+
+`--project`, `--spec`, and `--spec-url` are mutually exclusive. Local specification files are watched for normal edits and atomic replacements. Remote specifications are polled while `serve` or `watch` runs. Invalid reloads retain the last valid generated document.
+
+For a protected specification endpoint, keep credentials out of shell history:
+
+```bash
+export FROGGY_OPENAPI_HEADER='Authorization: Bearer your-token'
+froggy-docs serve \
+  --spec-url https://api.example.com/openapi.json \
+  --spec-header-env FROGGY_OPENAPI_HEADER
+```
+
+See [docs/openapi.md](docs/openapi.md) for validation, security limits, and framework examples.
 
 From a Dart checkout:
 
@@ -135,7 +183,7 @@ dart run bin/froggy_docs.dart serve --project ../express-mvc-starter --proxy htt
 
 ### Proxy notes
 
-When `serve` is started with `--proxy` (or `server.proxy` in `froggy_docs.yaml`), the docs UI can use a relative environment URL such as `/`. Browser requests go to FroggyDocs, which forwards them to the backend.
+When `serve` is started with `--proxy` (or `server.proxy` in `froggy_docs.yaml`), the docs UI can use a relative environment URL such as `/`. Browser requests go to FroggyDocs, which forwards API paths to the backend. Proxying is not limited to `/api/*`; imported paths such as `/pets` and `/v1/orders` work as well. Documentation assets remain local.
 
 If `http://localhost:3000` fails to connect from the proxy while the API is running, try `http://127.0.0.1:3000`. On some systems `localhost` resolves to IPv6 (`::1`) while the API process listens only on IPv4.
 
@@ -164,6 +212,13 @@ server:
 
 output:
   file: frontend/web/froggy_docs.json
+
+# Optional: choose one imported OpenAPI source. Omit this section to scan annotations.
+input:
+  spec: ./openapi.yaml
+  # specUrl: https://staging-api.example.com/openapi.json
+  # specHeaderEnv: FROGGY_OPENAPI_HEADER
+  pollIntervalSeconds: 10
 
 servers:
   - name: Local proxy
@@ -223,7 +278,7 @@ Full reference: [docs/annotations.md](docs/annotations.md)
 | C# | `.cs` | `//` |
 | C / C++ | `.c`, `.cpp`, `.h`, `.hpp` | `//` |
 
-The scanner skips common non-source trees such as `node_modules/`, `.git/`, `.dart_tool/`, and `frontend/`.
+The scanner skips common non-source trees such as `node_modules/`, `.git/`, `.dart_tool/`, and `frontend/`. Any backend language or framework that emits an OpenAPI 3.0/3.1 document can instead use `--spec` or `--spec-url` without FroggyDocs annotations.
 
 ---
 
@@ -269,6 +324,8 @@ Release process for maintainers: [RELEASE.md](RELEASE.md). Project internals ove
 |-----------|------|
 | `bin/froggy_docs.dart` | CLI entrypoint |
 | `lib/src/parser_engine.dart` | Annotation parsing and OpenAPI generation |
+| `lib/src/openapi_spec_loader.dart` | OpenAPI JSON/YAML loading, validation, reference expansion, and safe output |
+| `lib/src/specification_watcher.dart` | Local specification watching and remote polling |
 | `lib/src/web_server.dart` | Shelf HTTP server, static assets, API/media proxy |
 | `lib/src/watcher_engine.dart` | File watching and regeneration |
 | `lib/src/froggy_config.dart` | YAML / legacy JSON configuration |

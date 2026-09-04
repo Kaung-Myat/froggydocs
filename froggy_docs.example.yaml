@@ -15,6 +15,14 @@ server:
 output:
   file: frontend/web/froggy_docs.json
 
+# Optional imported OpenAPI input. Remove this section to scan source annotations.
+# Choose only one of spec or specUrl.
+# input:
+#   spec: ./openapi.yaml
+#   specUrl: https://staging-api.example.com/openapi.json
+#   specHeaderEnv: FROGGY_OPENAPI_HEADER
+#   pollIntervalSeconds: 10
+
 servers:
   - name: Local
     url: http://localhost:3000
